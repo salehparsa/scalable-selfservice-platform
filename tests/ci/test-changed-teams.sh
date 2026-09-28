@@ -104,6 +104,10 @@ detect "$BASE" HEAD
 assert_fails "team removed and folder deleted -> error" "$RC"
 assert_contains "team removed and folder deleted -> explains why" "keep the folder" "$ERR"
 
+SKIP_DESTROY_CHECKS=true detect "$BASE" HEAD
+assert_succeeds "same change on main (SKIP_DESTROY_CHECKS) -> not blocked" "$RC" "$ERR"
+assert_eq "same change on main -> still reports the removed team" '["beta"]' "$(val destroy)"
+
 new_repo alpha b1 b2 b3 b4
 set_teams alpha
 commit "remove four teams"
@@ -111,6 +115,8 @@ detect "$BASE" HEAD
 assert_fails "4 teams removed at once -> error (MAX_OFFBOARD=3)" "$RC"
 MAX_OFFBOARD=4 detect "$BASE" HEAD
 assert_succeeds "4 teams removed with MAX_OFFBOARD=4 -> ok" "$RC" "$ERR"
+SKIP_DESTROY_CHECKS=true detect "$BASE" HEAD
+assert_succeeds "4 teams removed on main (SKIP_DESTROY_CHECKS) -> not blocked" "$RC" "$ERR"
 
 new_repo alpha
 evil="live/team-\$(touch pwned)"

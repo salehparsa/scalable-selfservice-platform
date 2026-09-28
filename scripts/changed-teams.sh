@@ -11,14 +11,20 @@
 # Prints key=value lines for $GITHUB_OUTPUT:
 #   apply=<json>          teams to plan (PR) or apply (main)
 #   apply_batches=<json>  the same teams grouped into at most BATCH_LIMIT matrix jobs
-#   destroy=<json>        teams to plan-destroy (PR) or offboard (main)
+#   destroy=<json>        teams removed from teams.yaml (plan-destroy on PRs; destroyed
+#                         only by the separate terraform-destroy workflow)
 # Reads only git objects, so any two commits can be compared.
+#
+# SKIP_DESTROY_CHECKS=true skips the offboarding checks (folder kept, MAX_OFFBOARD). The apply
+# workflow sets it on main: the change is already merged, and blocking it would only stop the
+# other teams' applies. PRs keep the checks, so a bad offboarding change can't be merged.
 set -euo pipefail
 export LC_ALL=C
 
 BASE="${1:-}"
 HEAD="${2:-HEAD}"
 MAX_OFFBOARD="${MAX_OFFBOARD:-3}"
+SKIP_DESTROY_CHECKS="${SKIP_DESTROY_CHECKS:-false}"
 BATCH_LIMIT="${BATCH_LIMIT:-200}"
 NAME_RE='^[a-z0-9]([a-z0-9-]{0,13}[a-z0-9])?$'
 PLATFORM_RE='^(modules/|live/root\.hcl$|\.terraform-version$|\.terragrunt-version$)'
@@ -82,11 +88,13 @@ done < <(nonempty "$apply")
 
 while IFS= read -r t; do
   [[ "$t" =~ $NAME_RE ]] || err "invalid removed team name: '$t'"
-  has_folder "$t" || err "team '$t' was removed from teams.yaml and live/team-$t/ was deleted too; keep the folder until the pipeline has destroyed the team"
+  if [ "$SKIP_DESTROY_CHECKS" != true ] && ! has_folder "$t"; then
+    err "team '$t' was removed from teams.yaml and live/team-$t/ was deleted too; keep the folder until terraform-destroy has destroyed the team"
+  fi
 done < <(nonempty "$destroy")
 
 count="$(nonempty "$destroy" | wc -l | tr -d ' ')"
-if [ "$count" -gt "$MAX_OFFBOARD" ]; then
+if [ "$SKIP_DESTROY_CHECKS" != true ] && [ "$count" -gt "$MAX_OFFBOARD" ]; then
   err "$count teams removed in one change; at most $MAX_OFFBOARD allowed (raise MAX_OFFBOARD deliberately to offboard more)"
 fi
 

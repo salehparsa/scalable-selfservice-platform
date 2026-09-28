@@ -1,0 +1,126 @@
+# Merge to main: apply the teams that changed since the last successful deploy, automatically.
+# Never destroys anything: teams removed from teams.yaml are only reported here and are
+# destroyed by the separate, approver-gated offboard workflow.
+#
+# The `deployed/main` tag marks the last commit whose deploy fully succeeded. Changes are
+# detected from that tag (not just the previous commit), so a failed or skipped deploy is
+# picked up by the next one.
+#
+# AWS auth: static access keys of the "github-ci" IAM user (GitHub secrets). That user can only
+# assume the CI role (vars.AWS_CI_ROLE_ARN). OIDC would avoid long-lived keys, but this AWS
+# free-tier account has no GitHub OIDC identity provider; see bootstrap/README.md.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "live/**"
+      - "modules/**"
+      - "teams.yaml"
+      - "scripts/**"
+      - ".terraform-version"
+      - ".terragrunt-version"
+      - ".github/actions/**"
+      - ".github/workflows/deploy.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One deploy at a time, never cancelled. If several merges queue up, GitHub keeps only the
+  # newest pending run; that is safe because it compares with the deployed tag.
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  DEPLOYED_TAG: deployed/main
+
+jobs:
+  validate:
+    name: terraform validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tools
+      - run: make validate
+
+  changes:
+    name: detect changed teams
+    runs-on: ubuntu-latest
+    outputs:
+      apply: ${{ steps.detect.outputs.apply }}
+      apply_batches: ${{ steps.detect.outputs.apply_batches }}
+      destroy: ${{ steps.detect.outputs.destroy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history and tags, including deployed/main
+          persist-credentials: false
+      - name: Find last deployed commit
+        id: base
+        run: |
+          sha="$(git rev-parse -q --verify "refs/tags/$DEPLOYED_TAG^{commit}" || true)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if [ -n "$sha" ]; then
+            echo "label=last deploy ($DEPLOYED_TAG @ ${sha:0:7})" >> "$GITHUB_OUTPUT"
+          else
+            echo "label=no previous deploy: every team" >> "$GITHUB_OUTPUT"
+          fi
+      - id: detect
+        uses: ./.github/actions/detect-changes
+        with:
+          base: ${{ steps.base.outputs.sha }}
+          base-label: ${{ steps.base.outputs.label }}
+          skip-destroy-checks: "true"
+
+  apply:
+    name: apply (${{ matrix.teams }})
+    needs: [validate, changes]
+    if: needs.changes.outputs.apply != '[]' && vars.AWS_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production # records each deployment in the environment history
+    strategy:
+      fail-fast: false
+      matrix:
+        teams: ${{ fromJSON(needs.changes.outputs.apply_batches) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tools
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
+          role-duration-seconds: 3600
+      - name: terragrunt apply
+        env:
+          TEAMS: ${{ matrix.teams }}
+        run: |
+          read -ra teams <<< "$TEAMS"
+          scripts/run-teams.sh apply "${teams[@]}"
+
+  mark-deployed:
+    name: mark deployed
+    needs: [validate, changes, apply]
+    # Move the tag only when every apply succeeded (or there was nothing to apply).
+    if: >-
+      !cancelled() && vars.AWS_CI_ENABLED == 'true'
+      && needs.validate.result == 'success'
+      && needs.changes.result == 'success'
+      && contains(fromJSON('["success","skipped"]'), needs.apply.result)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Move the deployed tag to this commit
+        run: |
+          git tag -f "$DEPLOYED_TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$DEPLOYED_TAG"
+          echo "$DEPLOYED_TAG -> ${GITHUB_SHA:0:7}" >> "$GITHUB_STEP_SUMMARY"

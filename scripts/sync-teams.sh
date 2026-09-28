@@ -5,7 +5,7 @@
 #   check          : change nothing; exit 1 if anything is out of sync or a team.yaml
 #                    is missing required fields (for CI).
 # Never deletes folders: a folder whose name was removed from teams.yaml is
-# "pending offboarding" until CI has destroyed the team (see scripts/offboard-team.sh).
+# "pending offboarding" until the offboard workflow has destroyed the team.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -98,10 +98,10 @@ for dir in "$LIVE"/team-*/; do
   [ -d "$dir" ] || continue
   name="$(basename "$dir")"
   name="${name#team-}"
-  # A folder without a registry entry is the offboarding queue: CI destroys the team,
+  # A folder without a registry entry is the offboarding queue: the offboard workflow destroys the team,
   # then opens a PR deleting the folder.
   if ! printf '%s\n' "$names" | grep -qx -- "$name"; then
-    echo "notice: team-$name is not in teams.yaml: pending offboarding (CI destroys it, then opens a PR removing the folder)" >&2
+    echo "notice: team-$name is not in teams.yaml: pending offboarding (an approver runs the offboard workflow, which destroys it and opens a PR removing the folder)" >&2
   fi
 done
 

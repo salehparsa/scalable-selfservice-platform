@@ -1,0 +1,60 @@
+name: detect-changes
+description: >-
+  Run scripts/changed-teams.sh between a base commit and this commit, expose the selected
+  teams as outputs and write them to the job summary. Needs a checkout with full history.
+
+inputs:
+  base:
+    description: Base commit to compare with; empty selects every team.
+    required: false
+    default: ""
+  base-label:
+    description: Human-readable description of the base, for the summary.
+    required: false
+    default: base
+  skip-destroy-checks:
+    description: '"true" to skip offboarding checks (used after merge, where they would only block other teams).'
+    required: false
+    default: "false"
+
+outputs:
+  apply:
+    description: JSON list of teams to plan/apply.
+    value: ${{ steps.detect.outputs.apply }}
+  apply_batches:
+    description: The same teams grouped into matrix jobs (space-separated names).
+    value: ${{ steps.detect.outputs.apply_batches }}
+  destroy:
+    description: JSON list of teams removed from teams.yaml.
+    value: ${{ steps.detect.outputs.destroy }}
+
+runs:
+  using: composite
+  steps:
+    - name: Detect changed teams
+      id: detect
+      shell: bash
+      env:
+        BASE: ${{ inputs.base }}
+        BASE_LABEL: ${{ inputs.base-label }}
+        SKIP_DESTROY_CHECKS: ${{ inputs.skip-destroy-checks }}
+      run: |
+        set -euo pipefail
+        out="$RUNNER_TEMP/detect.out"
+        scripts/changed-teams.sh "$BASE" "$GITHUB_SHA" | tee "$out"
+        cat "$out" >> "$GITHUB_OUTPUT"
+        list() { sed -n "s/^$1=//p" "$out" | jq -r 'join(", ") | if . == "" then "none" else . end'; }
+        {
+          echo "### Teams selected"
+          echo
+          echo "Compared with: $BASE_LABEL"
+          echo
+          echo "| | Teams |"
+          echo "|---|---|"
+          echo "| plan / apply | $(list apply) |"
+          echo "| removed from teams.yaml | $(list destroy) |"
+          if [ "$(list destroy)" != none ]; then
+            echo
+            echo "Removed teams are **not** destroyed here. After merge, an approver runs the **offboard** workflow for each of them."
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
