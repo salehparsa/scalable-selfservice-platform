@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for scripts/authorize-deploy.sh (manual deploy gate).
 set -uo pipefail
+# shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 SCRIPT="$REPO_ROOT/scripts/authorize-deploy.sh"

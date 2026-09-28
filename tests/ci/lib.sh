@@ -1,7 +1,9 @@
+#!/usr/bin/env bash
 # Minimal assertion helpers for tests/ci (sourced; no bats dependency).
 PASS=0
 FAIL=0
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export REPO_ROOT
 
 ok() {
   PASS=$((PASS + 1))

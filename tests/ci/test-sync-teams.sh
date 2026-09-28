@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for scripts/sync-teams.sh (make teams / make check-teams) in a scratch layout.
 set -uo pipefail
+# shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 WORK="$(mktemp -d)"
@@ -34,8 +35,11 @@ echo "sync-teams.sh"
 new_layout alpha
 sync
 assert_succeeds "sync creates a new team" "$RC" "$OUT"
-[ -f live/team-alpha/terragrunt.hcl ] && [ -f live/team-alpha/team.yaml ] &&
-  ok "sync writes terragrunt.hcl and team.yaml" || not_ok "sync writes terragrunt.hcl and team.yaml"
+if [ -f live/team-alpha/terragrunt.hcl ] && [ -f live/team-alpha/team.yaml ]; then
+  ok "sync writes terragrunt.hcl and team.yaml"
+else
+  not_ok "sync writes terragrunt.hcl and team.yaml"
+fi
 assert_contains "starter team.yaml has trusted_principal_arns" '{account_id}:root' "$(cat live/team-alpha/team.yaml)"
 assert_contains "starter team.yaml has ManagedBy tag" 'ManagedBy: terraform' "$(cat live/team-alpha/team.yaml)"
 check
@@ -84,7 +88,7 @@ check
 assert_succeeds "folder removed from teams.yaml -> check still passes" "$RC" "$OUT"
 assert_contains "folder removed from teams.yaml -> pending offboarding notice" "pending offboarding" "$OUT"
 sync
-[ -d live/team-beta ] && ok "sync never deletes a team folder" || not_ok "sync never deletes a team folder"
+if [ -d live/team-beta ]; then ok "sync never deletes a team folder"; else not_ok "sync never deletes a team folder"; fi
 
 new_layout alpha
 echo "not_teams: []" >teams.yaml

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for scripts/changed-teams.sh using throwaway git repositories.
 set -uo pipefail
+# shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 SCRIPT="$REPO_ROOT/scripts/changed-teams.sh"
@@ -112,12 +113,13 @@ MAX_OFFBOARD=4 detect "$BASE" HEAD
 assert_succeeds "4 teams removed with MAX_OFFBOARD=4 -> ok" "$RC" "$ERR"
 
 new_repo alpha
-mkdir -p 'live/team-$(touch pwned)'
-echo x >'live/team-$(touch pwned)/team.yaml'
+evil="live/team-\$(touch pwned)"
+mkdir -p "$evil"
+echo x >"$evil/team.yaml"
 commit "malicious folder name"
 detect "$BASE" HEAD
 assert_fails "malicious folder name -> rejected" "$RC"
-[ ! -e pwned ] && ok "malicious folder name -> not executed" || not_ok "malicious folder name -> not executed"
+if [ -e pwned ]; then not_ok "malicious folder name -> not executed"; else ok "malicious folder name -> not executed"; fi
 
 new_repo alpha beta
 set_teams alpha
@@ -139,7 +141,7 @@ echo 'module v2' >modules/team_infrastructure/main.tf
 commit "module change with 250 teams"
 detect "$BASE" HEAD
 jobs="$(val apply_batches | jq 'length')"
-[ "$jobs" -le 200 ] && ok "250 teams -> at most 200 matrix jobs ($jobs)" || not_ok "250 teams -> at most 200 matrix jobs" "got $jobs"
+if [ "$jobs" -le 200 ]; then ok "250 teams -> at most 200 matrix jobs ($jobs)"; else not_ok "250 teams -> at most 200 matrix jobs" "got $jobs"; fi
 assert_eq "250 teams -> every team exactly once" "250 250" \
   "$(val apply_batches | jq -r '[.[] | split(" ")[]] | "\(length) \(unique | length)"')"
 
