@@ -4,7 +4,8 @@
 #                    create a starter team.yaml only if none exists.
 #   check          : change nothing; exit 1 if anything is out of sync or a team.yaml
 #                    is missing required fields (for CI).
-# Never deletes folders: removing a team requires a destroy first (offboarding).
+# Never deletes folders: a folder whose name was removed from teams.yaml is
+# "pending offboarding" until CI has destroyed the team (see scripts/offboard-team.sh).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -95,9 +96,10 @@ for dir in "$LIVE"/team-*/; do
   [ -d "$dir" ] || continue
   name="$(basename "$dir")"
   name="${name#team-}"
+  # A folder without a registry entry is the offboarding queue: CI destroys the team,
+  # then opens a PR deleting the folder.
   if ! printf '%s\n' "$names" | grep -qx -- "$name"; then
-    msg="team-$name exists in live/ but not in teams.yaml; offboard it (destroy) before deleting the folder"
-    if [ "$MODE" = check ]; then fail "$msg"; else echo "warning: $msg" >&2; fi
+    echo "notice: team-$name is not in teams.yaml: pending offboarding (CI destroys it, then opens a PR removing the folder)" >&2
   fi
 done
 

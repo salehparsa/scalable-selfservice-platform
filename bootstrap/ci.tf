@@ -80,6 +80,14 @@ data "aws_iam_policy_document" "github_ci_permissions" {
     resources = [local.team_bucket_arn]
   }
 
+  # Offboarding only: force_destroy empties versioned team buckets before deleting them.
+  # Not denied by team bucket policies; still denied on the state bucket by ProtectStateBucket.
+  statement {
+    sid       = "TeamBucketEmptyOnOffboarding"
+    actions   = ["s3:DeleteObjectVersion"]
+    resources = ["${local.team_bucket_arn}/*"]
+  }
+
   statement {
     sid = "TeamRoles"
     actions = [

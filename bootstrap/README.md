@@ -49,6 +49,10 @@ GitHub secrets ──► IAM user "github-ci" ──sts:AssumeRole──► IAM 
 
 - Read/write Terraform state objects and their lock files.
 - Manage team buckets matching `example-name-gmbh-*`.
+- Delete object versions in team buckets (`s3:DeleteObjectVersion`). Only the
+  offboarding job uses this: it sets `force_destroy` so a removed team's
+  versioned buckets can be emptied and deleted. Normal applies never set
+  `force_destroy`, and the permission is denied on the state bucket.
 - Manage team roles `example-name-gmbh-*-role` and policies
   `example-name-gmbh-*-policy`, and attach **only** those team policies to
   team roles (no `AdministratorAccess` or other AWS-managed policies).

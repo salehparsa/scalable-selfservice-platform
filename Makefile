@@ -1,10 +1,12 @@
 SHELL := /bin/bash
 MODULE := modules/team_infrastructure
+BASE ?= origin/main
+HEAD ?= HEAD
 
-.PHONY: help teams check-teams fmt validate plan
+.PHONY: help teams check-teams fmt validate plan changed-teams test-ci lint
 
 help: ## Show available targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
 
 teams: ## Create/refresh live/team-* folders from teams.yaml
 	@scripts/sync-teams.sh sync
@@ -25,3 +27,13 @@ validate: check-teams ## Offline checks, no AWS credentials needed
 plan: ## Plan one team: make plan TEAM=alpha
 	@[[ "$(TEAM)" =~ ^[a-z0-9-]+$$ ]] || { echo "usage: make plan TEAM=<name>"; exit 1; }
 	cd live/team-$(TEAM) && terragrunt plan
+
+changed-teams: ## Show what CI would run: make changed-teams BASE=origin/main HEAD=HEAD
+	@scripts/changed-teams.sh "$(BASE)" "$(HEAD)"
+
+test-ci: ## Run the CI script tests (no AWS)
+	@tests/ci/run.sh
+
+lint: ## shellcheck + actionlint (brew install shellcheck actionlint)
+	shellcheck scripts/*.sh tests/ci/*.sh
+	actionlint

@@ -43,8 +43,11 @@ generate "provider" {
   EOF
 }
 
-# Explicit mapping: team.yaml cannot override name_prefix or team_name.
+# Explicit mapping: team.yaml cannot override name_prefix, team_name or force_destroy.
 inputs = {
+  # Only scripts/offboard-team.sh sets TG_OFFBOARDING; normal applies never empty buckets.
+  force_destroy = get_env("TG_OFFBOARDING", "false") == "true"
+
   name_prefix = local.name_prefix
   team_name   = local.team_name
   owner       = local.team.owner

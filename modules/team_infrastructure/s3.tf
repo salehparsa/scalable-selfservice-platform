@@ -1,8 +1,9 @@
 resource "aws_s3_bucket" "this" {
   for_each = local.buckets
 
-  bucket = each.value.name
-  tags   = merge(local.tags, { Visibility = each.value.visibility })
+  bucket        = each.value.name
+  force_destroy = var.force_destroy
+  tags          = merge(local.tags, { Visibility = each.value.visibility })
 
   depends_on = [aws_iam_role.team]
 
