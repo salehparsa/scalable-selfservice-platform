@@ -8,11 +8,6 @@ output "state_bucket_name" {
   value       = aws_s3_bucket.state.bucket
 }
 
-output "lock_table_name" {
-  description = "DynamoDB table used for state locking."
-  value       = aws_dynamodb_table.lock.name
-}
-
 output "ci_user_name" {
   description = "IAM user to create an access key for; store it only in GitHub secrets."
   value       = aws_iam_user.github_ci.name

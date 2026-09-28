@@ -59,21 +59,11 @@ data "aws_iam_policy_document" "github_ci_permissions" {
     resources = [aws_s3_bucket.state.arn]
   }
 
+  # Covers state files and their S3 native lock files (<key>.tflock).
   statement {
     sid       = "StateObjects"
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
     resources = ["${aws_s3_bucket.state.arn}/*"]
-  }
-
-  statement {
-    sid = "StateLockTable"
-    actions = [
-      "dynamodb:DescribeTable",
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:DeleteItem",
-    ]
-    resources = [aws_dynamodb_table.lock.arn]
   }
 
   statement {

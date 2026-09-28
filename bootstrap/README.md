@@ -19,10 +19,13 @@ because the remote state bucket does not exist until this stack has run.
 | Resource | Name | Notes |
 |---|---|---|
 | S3 bucket | `example-name-gmbh-tfstate-<account_id>` | Versioned, SSE-S3, all public access blocked, TLS-only policy, old versions expire after 90 days, `prevent_destroy` |
-| DynamoDB table | `example-name-gmbh-tfstate-lock` | `PAY_PER_REQUEST`, hash key `LockID`, deletion protection on |
 
-The names are derived from the account id, so `live/terragrunt.hcl` rebuilds
-them with `get_aws_account_id()`, with no manual copying between stacks.
+State locking uses S3 native lock files (`use_lockfile = true` in
+`live/root.hcl`): a `<key>.tflock` object next to each team's state. No
+DynamoDB table is needed (DynamoDB locking is deprecated in Terraform).
+
+The bucket name is derived from the account id, so `live/root.hcl` rebuilds
+it with `get_aws_account_id()`, with no manual copying between stacks.
 
 ### CI identity
 
@@ -44,7 +47,7 @@ GitHub secrets ──► IAM user "github-ci" ──sts:AssumeRole──► IAM 
 
 **What the CI role can do:**
 
-- Read/write Terraform state objects and the lock table.
+- Read/write Terraform state objects and their lock files.
 - Manage team buckets matching `example-name-gmbh-*`.
 - Manage team roles `example-name-gmbh-*-role` and policies
   `example-name-gmbh-*-policy`, and attach **only** those team policies to
@@ -82,7 +85,7 @@ Inputs (all optional):
 
 | Variable | Default | Description |
 |---|---|---|
-| `region` | `eu-north-1` | Region for the state bucket and lock table |
+| `region` | `eu-north-1` | Region for the state bucket |
 | `name_prefix` | `example-name-gmbh` | Company prefix for platform resources |
 | `ci_user_name` | `github-ci` | CI IAM user name; must **not** start with `name_prefix` |
 
@@ -101,6 +104,6 @@ Inputs (all optional):
 
 | Output | Used for |
 |---|---|
-| `state_bucket_name`, `lock_table_name`, `region` | Reference / sanity check against `live/terragrunt.hcl` |
+| `state_bucket_name`, `region` | Reference / sanity check against `live/root.hcl` |
 | `ci_user_name` | Which user to create the access key for |
 | `ci_role_arn` | GitHub variable `AWS_CI_ROLE_ARN` |

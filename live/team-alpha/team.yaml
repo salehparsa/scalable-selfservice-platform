@@ -1,0 +1,10 @@
+# Settings for team "alpha", read by live/root.hcl. Owned by the team.
+owner: team-alpha@example.com
+cost_center: cc-0001
+buckets:
+  - { suffix: data, visibility: private }
+  - { suffix: logs, visibility: private }
+trusted_principal_arns:
+  - "arn:aws:iam::{account_id}:root"
+tags:
+  ManagedBy: terraform
