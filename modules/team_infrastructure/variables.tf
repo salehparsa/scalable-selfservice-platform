@@ -95,3 +95,9 @@ variable "tags" {
     error_message = "tags must include ManagedBy = \"terraform\"."
   }
 }
+
+variable "force_destroy" {
+  description = "Empty buckets (all object versions) on destroy. Set only by the offboarding pipeline via TG_OFFBOARDING; never in team.yaml."
+  type        = bool
+  default     = false
+}

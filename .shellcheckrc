@@ -1,0 +1,4 @@
+# Read by `make lint` and the CI static job: lets shellcheck follow the
+# `# shellcheck source=lib.sh` directives in tests/ci.
+external-sources=true
+source-path=SCRIPTDIR

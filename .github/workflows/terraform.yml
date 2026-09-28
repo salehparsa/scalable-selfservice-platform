@@ -1,0 +1,319 @@
+# Team infrastructure pipeline.
+#
+# What gets triggered is decided by scripts/changed-teams.sh, which diffs two commits:
+#   - files under live/team-<name>/ (a team edits its team.yaml)  -> plan/apply that team only
+#   - name added to teams.yaml                                    -> plan/apply the new team
+#   - modules/, live/root.hcl, tool versions                      -> plan/apply every team
+#   - name removed from teams.yaml                                -> plan-destroy / offboard that team
+#
+# Flow:
+#   pull_request       static checks + plan (diff against the PR base). No changes to AWS.
+#   push to main       static checks + summary of what is pending since the last deploy.
+#   workflow_dispatch  the deploy: authorize -> apply (production) / offboard (offboarding),
+#                      covering everything since the `deployed/main` tag, which moves on success.
+#
+# Approval: this is a private repository on the GitHub Free plan, where environments can't
+# require reviewers. Deploys therefore never start on merge; an allow-listed user starts them
+# with "Run workflow", and scripts/authorize-deploy.sh enforces the allow-list
+# (vars.DEPLOY_ALLOWED_ACTORS), the main branch, and an explicit allow_offboard for destroys.
+#
+# AWS auth: static access keys of the "github-ci" IAM user, stored as GitHub secrets.
+# That user can only assume the CI role (vars.AWS_CI_ROLE_ARN), which holds the Terraform
+# permissions and returns 1-hour credentials. OIDC would avoid long-lived keys, but this
+# AWS free-tier account has no GitHub OIDC identity provider. To migrate: add the provider,
+# trust it in the CI role, grant `id-token: write`, and drop the two key secrets.
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - "live/**"
+      - "modules/**"
+      - "teams.yaml"
+      - "scripts/**"
+      - "tests/**"
+      - "Makefile"
+      - ".terraform-version"
+      - ".terragrunt-version"
+      - ".github/**"
+  push:
+    branches: [main]
+    paths:
+      - "live/**"
+      - "modules/**"
+      - "teams.yaml"
+      - "scripts/**"
+      - "tests/**"
+      - "Makefile"
+      - ".terraform-version"
+      - ".terragrunt-version"
+      - ".github/**"
+  workflow_dispatch:
+    inputs:
+      allow_offboard:
+        description: "Also destroy teams removed from teams.yaml since the last deploy"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Deploys: one at a time. PRs: a new push cancels the previous run.
+  # main pushes: one run per commit, never cancelled (they don't touch AWS).
+  group: >-
+    terraform-${{ github.event_name == 'workflow_dispatch' && 'deploy'
+    || github.event_name == 'pull_request' && github.ref
+    || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DEPLOYED_TAG: deployed/main
+
+jobs:
+  static:
+    name: static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tools
+      - name: Validate (teams in sync, fmt, module validate)
+        run: make validate
+      - name: CI script tests
+        run: make test-ci
+      - name: Lint shell scripts and workflows
+        run: |
+          shellcheck scripts/*.sh tests/ci/*.sh
+          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+
+  changes:
+    name: detect changed teams
+    runs-on: ubuntu-latest
+    outputs:
+      apply: ${{ steps.detect.outputs.apply }}
+      apply_batches: ${{ steps.detect.outputs.apply_batches }}
+      destroy: ${{ steps.detect.outputs.destroy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history and tags, including deployed/main
+          persist-credentials: false
+      - name: Detect
+        id: detect
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # PRs compare with their base. main pushes and deploys compare with the last
+          # successful deploy; without that tag every team is selected.
+          if [ "$EVENT" = pull_request ]; then
+            base="$PR_BASE"; label="PR base"
+          else
+            base="$(git rev-parse -q --verify "refs/tags/$DEPLOYED_TAG^{commit}" || true)"
+            label="last deploy ($DEPLOYED_TAG${base:+ @ ${base:0:7}})"
+          fi
+          scripts/changed-teams.sh "$base" "$GITHUB_SHA" | tee detect.out
+          cat detect.out >> "$GITHUB_OUTPUT"
+          {
+            if [ "$EVENT" = push ]; then
+              echo "### Pending deploy (run the workflow manually to apply)"
+            else
+              echo "### Teams selected by this run"
+            fi
+            echo
+            echo "Compared with: $label"
+            echo
+            echo "| | Teams |"
+            echo "|---|---|"
+            echo "| plan / apply | $(sed -n 's/^apply=//p' detect.out | jq -r 'join(", ") | if . == "" then "none" else . end') |"
+            echo "| destroy (offboarding) | $(sed -n 's/^destroy=//p' detect.out | jq -r 'join(", ") | if . == "" then "none" else . end') |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  plan:
+    name: plan (${{ matrix.teams }})
+    needs: [static, changes]
+    if: github.event_name == 'pull_request' && needs.changes.outputs.apply != '[]' && vars.AWS_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        teams: ${{ fromJSON(needs.changes.outputs.apply_batches) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tools
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
+          role-duration-seconds: 3600
+      - name: terragrunt plan
+        env:
+          TEAMS: ${{ matrix.teams }}
+        run: |
+          read -ra teams <<< "$TEAMS"
+          scripts/run-teams.sh plan "${teams[@]}"
+
+  plan-destroy:
+    name: plan-destroy (${{ matrix.team }})
+    needs: [static, changes]
+    if: github.event_name == 'pull_request' && needs.changes.outputs.destroy != '[]' && vars.AWS_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        team: ${{ fromJSON(needs.changes.outputs.destroy) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tools
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
+          role-duration-seconds: 3600
+      - name: terragrunt plan -destroy
+        env:
+          TEAM: ${{ matrix.team }}
+        run: scripts/run-teams.sh plan-destroy "$TEAM"
+
+  authorize:
+    name: authorize deploy
+    needs: [static, changes]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check actor, branch and offboarding confirmation
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTORS: ${{ vars.DEPLOY_ALLOWED_ACTORS }}
+          REF: ${{ github.ref }}
+          DESTROY: ${{ needs.changes.outputs.destroy }}
+          ALLOW_OFFBOARD: ${{ inputs.allow_offboard }}
+        run: scripts/authorize-deploy.sh
+
+  apply:
+    name: apply (${{ matrix.teams }})
+    needs: [changes, authorize]
+    if: needs.changes.outputs.apply != '[]' && vars.AWS_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production # records the deployment; approval is enforced by `authorize`
+    strategy:
+      fail-fast: false
+      matrix:
+        teams: ${{ fromJSON(needs.changes.outputs.apply_batches) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tools
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
+          role-duration-seconds: 3600
+      - name: terragrunt apply
+        env:
+          TEAMS: ${{ matrix.teams }}
+        run: |
+          read -ra teams <<< "$TEAMS"
+          scripts/run-teams.sh apply "${teams[@]}"
+
+  offboard:
+    name: offboard (${{ matrix.team }})
+    needs: [changes, authorize]
+    if: needs.changes.outputs.destroy != '[]' && vars.AWS_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: offboarding # records the deployment; approval is enforced by `authorize`
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        team: ${{ fromJSON(needs.changes.outputs.destroy) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tools
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
+          role-duration-seconds: 3600
+      - name: Destroy team resources and state
+        env:
+          TEAM: ${{ matrix.team }}
+        run: scripts/offboard-team.sh "$TEAM"
+
+  mark-deployed:
+    name: mark deployed
+    needs: [authorize, apply, offboard]
+    # Move the tag only if every apply and offboard succeeded (or had nothing to do),
+    # so a failed deploy is retried in full by the next run.
+    if: >-
+      !cancelled() && vars.AWS_CI_ENABLED == 'true'
+      && needs.authorize.result == 'success'
+      && contains(fromJSON('["success","skipped"]'), needs.apply.result)
+      && contains(fromJSON('["success","skipped"]'), needs.offboard.result)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Move the deployed tag to this commit
+        run: |
+          git tag -f "$DEPLOYED_TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$DEPLOYED_TAG"
+          echo "$DEPLOYED_TAG -> ${GITHUB_SHA:0:7}" >> "$GITHUB_STEP_SUMMARY"
+
+  cleanup-pr:
+    name: open folder cleanup PR
+    needs: [changes, offboard]
+    if: needs.offboard.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Open PR deleting offboarded team folders
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEAMS_JSON: ${{ needs.changes.outputs.destroy }}
+        run: |
+          set -euo pipefail
+          branch="offboarding/cleanup-${GITHUB_RUN_ID}"
+          git switch -c "$branch"
+          teams=()
+          while IFS= read -r t; do
+            teams+=("$t")
+            if [ -d "live/team-$t" ]; then git rm -r -q "live/team-$t"; fi
+          done < <(jq -r '.[]' <<< "$TEAMS_JSON")
+          if git diff --cached --quiet; then
+            echo "folders already removed; nothing to do"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "chore: remove offboarded team folders: ${teams[*]}"
+          git push --force origin "$branch"
+          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            gh pr create --base main --head "$branch" \
+              --title "chore: remove offboarded team folders: ${teams[*]}" \
+              --body "Resources and state for **${teams[*]}** were destroyed by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. This removes their \`live/team-*\` folders. Merging it triggers no plan or apply."
+          fi

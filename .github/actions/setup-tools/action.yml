@@ -1,0 +1,32 @@
+name: setup-tools
+description: Install the Terraform and Terragrunt versions pinned in .terraform-version and .terragrunt-version.
+
+runs:
+  using: composite
+  steps:
+    - name: Read pinned versions
+      id: versions
+      shell: bash
+      run: |
+        echo "terraform=$(tr -d '[:space:]' < .terraform-version)" >> "$GITHUB_OUTPUT"
+        echo "terragrunt=$(tr -d '[:space:]' < .terragrunt-version)" >> "$GITHUB_OUTPUT"
+
+    - name: Install Terraform
+      uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      with:
+        terraform_version: ${{ steps.versions.outputs.terraform }}
+        terraform_wrapper: false
+
+    - name: Install Terragrunt (checksum verified)
+      shell: bash
+      env:
+        VERSION: ${{ steps.versions.outputs.terragrunt }}
+      run: |
+        set -euo pipefail
+        base="https://github.com/gruntwork-io/terragrunt/releases/download/v${VERSION}"
+        cd "$RUNNER_TEMP"
+        curl -sSfLO "$base/terragrunt_linux_amd64"
+        curl -sSfLO "$base/SHA256SUMS"
+        grep ' terragrunt_linux_amd64$' SHA256SUMS | sha256sum -c -
+        sudo install -m 0755 terragrunt_linux_amd64 /usr/local/bin/terragrunt
+        terragrunt --version

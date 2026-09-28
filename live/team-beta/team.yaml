@@ -1,7 +1,7 @@
 # Settings for team "beta", read by live/root.hcl. Owned by the team.
 # owner, cost_center and buckets are empty on purpose: checks fail until they are filled in.
 owner: "team-beta@example.com"       # contact e-mail or handle
-cost_center: "cc-0002 " # cost allocation
+cost_center: "cc-0002" # cost allocation
 buckets:
   - { suffix: data, visibility: private }
   - { suffix: logs, visibility: private }
