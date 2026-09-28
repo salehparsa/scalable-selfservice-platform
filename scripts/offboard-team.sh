@@ -12,8 +12,10 @@ team="${1:-}"
 [[ "$team" =~ $NAME_RE ]] || { echo "usage: $0 <team>  (valid team name required)" >&2; exit 2; }
 
 dir="$ROOT/live/team-$team"
-[ -f "$dir/terragrunt.hcl" ] && [ -f "$dir/team.yaml" ] ||
-  { echo "error: $dir is missing; destroy needs the team's config" >&2; exit 1; }
+if [ ! -f "$dir/terragrunt.hcl" ] || [ ! -f "$dir/team.yaml" ]; then
+  echo "error: $dir is missing; destroy needs the team's config" >&2
+  exit 1
+fi
 if yq -e ".teams // [] | contains([\"$team\"])" "$ROOT/teams.yaml" >/dev/null 2>&1; then
   echo "error: team '$team' is still in teams.yaml; refusing to destroy" >&2
   exit 1

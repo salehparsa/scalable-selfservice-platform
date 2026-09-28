@@ -7,5 +7,5 @@ rc=0
 for t in test-*.sh; do
   bash "$t" || rc=1
 done
-[ "$rc" -eq 0 ] && echo "all CI tests passed" || echo "CI tests failed"
+if [ "$rc" -eq 0 ]; then echo "all CI tests passed"; else echo "CI tests failed"; fi
 exit "$rc"

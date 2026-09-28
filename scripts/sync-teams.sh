@@ -106,4 +106,4 @@ for dir in "$LIVE"/team-*/; do
 done
 
 [ "$errors" -eq 0 ] || { echo "$errors problem(s) found" >&2; exit 1; }
-[ "$MODE" = check ] && echo "live/ is in sync with teams.yaml" || true
+if [ "$MODE" = check ]; then echo "live/ is in sync with teams.yaml"; fi
