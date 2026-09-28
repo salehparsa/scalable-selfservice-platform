@@ -1,0 +1,40 @@
+# Terraform / Terragrunt working dirs
+.terraform/
+.terragrunt-cache/
+
+# State and plan files
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Variable files (may contain sensitive values)
+*.tfvars
+*.tfvars.json
+
+# Local overrides
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI config
+.terraformrc
+terraform.rc
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Note: .terraform.lock.hcl is intentionally committed to pin provider versions.
