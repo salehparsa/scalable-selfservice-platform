@@ -29,5 +29,6 @@ locals {
     CostCenter = var.cost_center
     ManagedBy  = "terraform"
     Project    = "scalable-selfservice-platform"
+    Environment = "production"
   })
 }
