@@ -23,9 +23,9 @@ jobs:
         with:
           persist-credentials: false
       # yq, jq and shellcheck are preinstalled on ubuntu-latest.
-      - name: teams.yaml and live/ are in sync, team.yaml fields present
+      - name: teams.yaml and live/ are in sync
         run: make check-teams
-      - name: Pipeline script tests
+      - name: Change-detection tests
         run: make test-ci
       - name: shellcheck
         run: shellcheck scripts/*.sh tests/ci/*.sh

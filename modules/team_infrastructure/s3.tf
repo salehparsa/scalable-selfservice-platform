@@ -109,7 +109,7 @@ data "aws_iam_policy_document" "bucket" {
     condition {
       test     = "ArnNotEquals"
       variable = "aws:PrincipalArn"
-      values   = [aws_iam_role.team.arn]
+      values   = [local.role_arn]
     }
   }
 

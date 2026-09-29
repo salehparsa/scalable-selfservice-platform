@@ -36,9 +36,9 @@ Four workflows, split by what they are allowed to do:
 
 | Workflow | Trigger | What it does | AWS |
 |---|---|---|---|
-| **checks** (`checks.yml`) | every PR and push to `main` | Non-Terraform checks: `make check-teams`, pipeline script tests (`make test-ci`), shellcheck, actionlint | no |
-| **plan** (`plan.yml`) | pull requests | `make validate`, change detection, `terragrunt plan` per changed team, `plan -destroy` per team removed from `teams.yaml` | read only |
-| **deploy** (`deploy.yml`) | push to `main` (automatic) | `make validate`, change detection, `terragrunt apply` per changed team, then moves the `deployed/main` tag. **Never destroys.** | yes |
+| **checks** (`checks.yml`) | every PR and push to `main` | Non-Terraform checks: `make check-teams`, change-detection tests (`make test-ci`), shellcheck, actionlint | no |
+| **plan** (`plan.yml`) | pull requests | `make validate`, module tests (`make test-module`), change detection, `terragrunt plan` per changed team, `plan -destroy` per team removed from `teams.yaml` | read only |
+| **deploy** (`deploy.yml`) | push to `main` (automatic); *Run workflow* re-applies every team | `make validate`, module tests, change detection, `terragrunt apply` per changed team. **Never destroys.** | yes |
 | **offboard** (`offboard.yml`) | manual only (*Run workflow*) | Approver gate, destroy of one team, then a bot PR deleting its folder | yes |
 
 Destroying lives in its own workflow on purpose, as a safety net: no merge or deploy can
@@ -60,9 +60,13 @@ ever remove a team's resources. Only an approver running **offboard** can.
 result to the job summary:
 
 - **plan** compares with the PR base.
-- **deploy** compares with the `deployed/main` tag: the last commit whose deploy fully
-  succeeded. A failed deploy leaves the tag in place, so the next merge retries those teams
-  too. With no tag yet, every team is selected.
+- **deploy** compares with the commit of the last *successful* **deploy** run, read from the
+  Actions history (`gh run list`). No tag or extra state is stored. So:
+  - A failed deploy is retried by the next merge.
+  - If GitHub replaces a queued deploy with a newer one, the newer one still covers its changes.
+  - With no successful deploy yet, every team is selected.
+  - Running **deploy** manually (*Run workflow*) re-applies every team, e.g. after fixing a
+    failure or enabling `AWS_CI_ENABLED`.
 
 | Change | What runs |
 |---|---|
@@ -112,7 +116,8 @@ has no GitHub OIDC identity provider. See `bootstrap/README.md` for the migratio
 
 ## Guard rails
 
-Every rule below is enforced in code. The "Where" column says which check fails first.
+Every rule below is enforced in code. The "Where" column says which check fails first. The
+module's rules are covered by its tests (see [Testing](#testing)).
 
 ### Team configuration
 
@@ -120,8 +125,8 @@ Every rule below is enforced in code. The "Where" column says which check fails 
 |---|---|
 | Team names are 1-15 chars (`a-z`, `0-9`, `-`, not starting/ending with `-`), unique, and not reserved (`tfstate`, `github`, `ci`, `admin`, `platform`, `root`) | `make check-teams`, module |
 | Every name in `teams.yaml` has a folder, and every generated `terragrunt.hcl` is unmodified | `make check-teams` |
-| `team.yaml` must set `owner`, `cost_center`, at least one bucket, `trusted_principal_arns` and `tags.ManagedBy: terraform` | `make check-teams`, module |
-| Every bucket declares `visibility: public` or `private`. There is no default, so a missing or other value fails | `make check-teams`, module |
+| `team.yaml` must set `owner`, `cost_center`, at least one bucket, `trusted_principal_arns` and `tags.ManagedBy: terraform` | module |
+| Every bucket declares `visibility: public` or `private`. There is no default, so a missing or other value fails | module |
 | Bucket suffixes are unique per team, 1-14 chars; the full bucket name must fit S3's 63-char limit | module |
 | Trusted principals must be `:root`, `:role/…` or `:user/…` ARNs. Wildcards, unresolved placeholders and other accounts' `:root` are rejected | module |
 | `team.yaml` can only set the fields mapped in `live/root.hcl`. It cannot change `name_prefix`, `team_name` (taken from the folder) or `force_destroy` | `live/root.hcl` |
@@ -145,10 +150,10 @@ Every rule below is enforced in code. The "Where" column says which check fails 
 | **plan** and **deploy** run `make validate` before any AWS job; **checks** runs the script tests and lint on every PR and push | workflows |
 | A team only plans or applies when its own folder or the platform code changed (see the change-detection table) | `changed-teams.sh` |
 | Team folder names are validated before use and only passed to the shell through `env:`, so a folder like `team-$(cmd)` is rejected, never executed | `changed-teams.sh`, workflows |
-| One **deploy** runs at a time and is never cancelled; the `deployed/main` tag only moves when every apply succeeded | `deploy.yml` |
+| One **deploy** runs at a time and is never cancelled; a deploy only counts as the new baseline when every apply in it succeeded | `deploy.yml` |
 | Each team's S3 lock file serialises overlapping runs on the same team (10-minute lock timeout) | `live/root.hcl`, `run-teams.sh` |
 | AWS jobs are skipped unless `AWS_CI_ENABLED` is `true`; PRs from forks never receive secrets | workflows, GitHub |
-| Actions are pinned to commit SHAs, Terragrunt is checksum-verified, and the default token is read-only. Only `mark-deployed` (the tag) and `cleanup-pr` get write access | workflows, `setup-tools` |
+| Actions are pinned to commit SHAs, Terragrunt is checksum-verified, and the default token is read-only. Only **offboard**'s `cleanup-pr` gets write access | workflows, `setup-tools` |
 | `bootstrap/` is never applied by CI | workflows |
 
 ### Offboarding safety
@@ -198,13 +203,71 @@ All of this is under the repository's **Settings**.
    `cd bootstrap && terraform apply` with admin credentials. CI never applies it. The current
    version adds `s3:DeleteObjectVersion` on team buckets, which offboarding needs.
 
+## Testing
+
+Nothing here needs AWS credentials. Run everything with `make test`.
+
+### The module (`make test-module`)
+
+`modules/team_infrastructure/tests/team_infrastructure.tftest.hcl` uses Terraform's built-in
+[`terraform test`](https://developer.hashicorp.com/terraform/language/tests). Every `run` is a
+`plan`, so nothing is created:
+
+- **Fake credentials:** the AWS provider gets dummy keys, with credential and account checks switched off.
+- **Overridden account data:** `override_data` pins the account ID and partition, so names are predictable.
+- **Real IAM policies:** the provider still builds the IAM policy JSON locally, so the tests assert on
+  the real policies.
+
+| Covered | Runs |
+|---|---|
+| Naming convention for buckets, role and policy | `names_follow_the_convention` |
+| Private buckets block all public access; public buckets allow only a policy-based public read | `private_bucket_blocks_everything`, `public_bucket_allows_policy_read_only` |
+| Every bucket denies non-TLS access and object access by anyone but the team role | `every_bucket_denies_non_tls_and_other_principals` |
+| The team policy names only the team's own buckets and can't delete object versions | `team_policy_only_names_own_buckets` |
+| Platform tags win over team tags; `force_destroy` is off by default | `platform_tags_cannot_be_overridden`, `force_destroy_is_off_by_default` |
+| Invalid input is rejected: visibility, duplicate or no buckets, bad or reserved team names, wildcard or foreign-root trust, missing `ManagedBy`, bucket names over 63 chars | `rejects_*` (`expect_failures`) |
+
+```sh
+make test-module
+# or directly, from the module:
+cd modules/team_infrastructure
+terraform init -backend=false
+terraform test                        # all runs
+terraform test -filter=tests/team_infrastructure.tftest.hcl -verbose
+```
+
+To add a case, add a `run` block to the test file. Use `assert` for expected behaviour, or
+`expect_failures = [var.<name>]` for input that must be rejected.
+
+Omitting `visibility` entirely is a type error, not a validation failure, so `expect_failures`
+can't capture it. It's checked by hand: `terragrunt plan` on a `team.yaml` without it fails.
+
+**Not covered: real-AWS integration.** Proving isolation end to end, e.g. that team A's role
+gets `AccessDenied` on team B's bucket, needs real resources. That's the job for
+[Terratest](https://terratest.gruntwork.io/) (Go), or for `terraform test` with
+`command = apply` against a sandbox account. It isn't included, to avoid cost and a Go
+toolchain in this project.
+
+### The pipeline (`make test-ci`)
+
+`tests/ci/test-changed-teams.sh` checks `scripts/changed-teams.sh`, the logic that decides
+which teams CI plans, applies or reports for destroy. Each case builds a throwaway git repo:
+- a team edits its own file
+- a module change
+- a docs-only change
+- a team is added
+- a team is removed
+- a team is removed together with its folder, which is rejected
+- a malicious folder name, which is rejected
+- 250 teams stay within the matrix limit
+
 ## Local commands
 
 ```sh
 make help            # list targets
 make teams           # create/refresh team folders from teams.yaml
 make validate        # offline checks (no AWS)
-make test-ci         # tests for the CI scripts (no AWS)
+make test            # module tests + change-detection tests (no AWS)
 make lint            # shellcheck + actionlint (brew install shellcheck actionlint)
 make plan TEAM=alpha # plan one team (needs AWS credentials)
 ```

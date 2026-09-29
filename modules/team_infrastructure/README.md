@@ -58,3 +58,10 @@ admits this team's role.
 `Team`, `Owner`, `CostCenter`, `ManagedBy`, `Project` on every resource, plus
 `Visibility` on buckets. Platform tags are merged last, so team `tags` can add
 keys but never override these.
+
+## Tests
+
+`tests/team_infrastructure.tftest.hcl` runs with `terraform test`, fully offline: every run is
+a plan with fake credentials. It covers naming, public/private handling, bucket and IAM
+policy scoping, tags and rejected inputs. Run `make test-module` from the repository root;
+see the root README's *Testing* section for details.

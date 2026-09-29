@@ -2,8 +2,8 @@
 # Syncs live/team-<name>/ folders with teams.yaml.
 #   sync  (default): create missing folders, (re)write the generated terragrunt.hcl,
 #                    create a starter team.yaml only if none exists.
-#   check          : change nothing; exit 1 if anything is out of sync or a team.yaml
-#                    is missing required fields (for CI).
+#   check          : change nothing; exit 1 if anything is out of sync (for CI).
+# team.yaml contents are validated by the module itself (see modules/team_infrastructure/tests).
 # Never deletes folders: a folder whose name was removed from teams.yaml is
 # "pending offboarding" until the offboard workflow has destroyed the team.
 set -euo pipefail
@@ -29,7 +29,7 @@ EOF
 starter_team_yaml() {
   cat <<EOF
 # Settings for team "$1", read by live/root.hcl. Owned by the team.
-# owner, cost_center and buckets are empty on purpose: checks fail until they are filled in.
+# owner, cost_center and buckets are empty on purpose: plan fails (module validation) until they are filled in.
 owner: ""       # contact e-mail or handle
 cost_center: "" # cost allocation
 buckets: []     # e.g. - { suffix: data, visibility: private }   visibility: public | private
@@ -40,19 +40,6 @@ trusted_principal_arns:
 tags:
   ManagedBy: terraform
 EOF
-}
-
-# Offline content checks; the module re-validates everything at plan time.
-check_team_yaml() {
-  local f="$1" label="$2"
-  yq -e '.' "$f" >/dev/null 2>&1 || { fail "$label: team.yaml is not valid YAML"; return; }
-  [ -n "$(yq -r '.owner // ""' "$f")" ] || fail "$label: owner is required"
-  [ -n "$(yq -r '.cost_center // ""' "$f")" ] || fail "$label: cost_center is required"
-  [ "$(yq -r '.buckets // [] | length' "$f")" -gt 0 ] || fail "$label: at least one bucket is required"
-  [ "$(yq -r '.buckets // [] | map(select(.visibility != "public" and .visibility != "private")) | length' "$f")" -eq 0 ] ||
-    fail "$label: every bucket needs visibility: public or private"
-  [ "$(yq -r '.trusted_principal_arns // [] | length' "$f")" -gt 0 ] || fail "$label: trusted_principal_arns is required"
-  [ "$(yq -r '.tags.ManagedBy // ""' "$f")" = terraform ] || fail "$label: tags.ManagedBy must be terraform"
 }
 
 yq -e '.teams | tag == "!!seq"' "$REGISTRY" >/dev/null 2>&1 || {
@@ -76,11 +63,7 @@ for name in $names; do
     [ -d "$dir" ] || { fail "team-$name: folder missing (run: make teams)"; continue; }
     printf '%s' "$TERRAGRUNT_HCL" | cmp -s - "$dir/terragrunt.hcl" ||
       fail "team-$name: terragrunt.hcl missing or modified (run: make teams)"
-    if [ -f "$dir/team.yaml" ]; then
-      check_team_yaml "$dir/team.yaml" "team-$name"
-    else
-      fail "team-$name: team.yaml missing (run: make teams)"
-    fi
+    [ -f "$dir/team.yaml" ] || fail "team-$name: team.yaml missing (run: make teams)"
   else
     mkdir -p "$dir"
     if ! printf '%s' "$TERRAGRUNT_HCL" | cmp -s - "$dir/terragrunt.hcl" 2>/dev/null; then
@@ -89,7 +72,7 @@ for name in $names; do
     fi
     if [ ! -f "$dir/team.yaml" ]; then
       starter_team_yaml "$name" >"$dir/team.yaml"
-      echo "created live/team-$name/team.yaml (fill in owner, cost_center, buckets; then run make check-teams)"
+      echo "created live/team-$name/team.yaml (fill in owner, cost_center, buckets)"
     fi
   fi
 done
