@@ -6,7 +6,8 @@ it adds one name to `teams.yaml` and one generated folder.
 
 ```
 bootstrap/                      one-time, applied by an admin: state bucket + CI identity
-modules/team_infrastructure/    the platform module (buckets + team role)
+modules/team_infrastructure/    the platform module (buckets + team role), released as tags
+live/module-versions.yaml       the released module version teams run + canary teams (written by CI)
 live/root.hcl                   shared Terragrunt config: backend, provider, team.yaml -> inputs
 live/team-<name>/terragrunt.hcl generated, identical for every team (never edited)
 live/team-<name>/team.yaml      the only file a team edits
@@ -32,13 +33,14 @@ scripts/                        sync-teams, changed-teams, run-teams, offboard-t
 
 ## CI/CD
 
-Four workflows, split by what they are allowed to do:
+Five workflows, split by what they are allowed to do:
 
 | Workflow | Trigger | What it does | AWS |
 |---|---|---|---|
 | **checks** (`checks.yml`) | every PR and push to `main` | Non-Terraform checks: `make check-teams`, change-detection tests (`make test-ci`), shellcheck, actionlint | no |
 | **plan** (`plan.yml`) | pull requests | `make validate`, module tests (`make test-module`), change detection, `terragrunt plan` per changed team, `plan -destroy` per team removed from `teams.yaml` | read only |
 | **deploy** (`deploy.yml`) | push to `main` (automatic); *Run workflow* re-applies every team | `make validate`, module tests, change detection, `terragrunt apply` per changed team. **Never destroys.** | yes |
+| **release** (`release.yml`) | PR touching `modules/**`; on merge; manual *Run workflow* | Versions and tags the module, then rolls the new version out: canary team first, then every team. See [Releasing the module](#releasing-the-module) | yes |
 | **offboard** (`offboard.yml`) | manual only (*Run workflow*) | Approver gate, destroy of one team, then a bot PR deleting its folder | yes |
 
 Destroying lives in its own workflow on purpose, as a safety net: no merge or deploy can
@@ -72,7 +74,8 @@ result to the job summary:
 |---|---|
 | A team edits files under `live/team-<name>/` | plan (PR) / apply (merge) for **that team only** |
 | Name added to `teams.yaml` | plan / apply for the new team |
-| `modules/`, `live/root.hcl`, `.terraform-version`, `.terragrunt-version` | plan / apply for **every** team |
+| `live/root.hcl`, `.terraform-version`, `.terragrunt-version` | plan / apply for **every** team |
+| `modules/` | **no team** on **plan** / **deploy**. Teams run a released module version, so a module change reaches them only through **release**. On a PR, **plan** previews the change on the canary team(s) with the PR's own module code |
 | Name removed from `teams.yaml` | `plan -destroy` on the PR; after merge, the summary asks an approver to run **offboard** |
 | Anything else (docs, README) | nothing |
 
@@ -82,6 +85,46 @@ a job, so a platform-wide change stays under GitHub's 256-job matrix limit. Run
 
 AWS jobs run only when the repository variable `AWS_CI_ENABLED` is `true`. Without it,
 **checks** and the validation and change-detection jobs still run.
+
+### Releasing the module
+
+Teams don't run the module from `main`: `live/root.hcl` pins it to a release tag, recorded in
+`live/module-versions.yaml`. Merging a module change deploys nothing by itself; the **release**
+workflow does the rest, with no manual tag or version bump:
+
+```
+PR touching modules/**      merged
+  │                           │
+  ▼                           ▼
+comment: next version    tag + GitHub release  ──►  canary team(s)  ──►  record  ──►  every team
+(techpivot/terraform-    (same action)               apply new tag       default:     apply new tag
+ module-releaser)                                    (stops on failure)  <tag> on main
+```
+
+- **Version:** [terraform-module-releaser](https://github.com/marketplace/actions/terraform-module-releaser)
+  derives the bump from [Conventional Commit](https://www.conventionalcommits.org/) messages
+  (`feat:` minor, `fix:` patch, `feat!:` or `BREAKING CHANGE` major; default patch) and comments the
+  planned version on the PR. Changes that only touch tests or markdown don't release.
+  The wiki feature is off (wikis aren't available on private Free-plan repositories) and `bootstrap/`
+  is excluded. Release tags contain only the module, named `<module>/vX.Y.Z`.
+- **Canary:** the teams in `canary_teams` (`live/module-versions.yaml`) get the new version first. If
+  their apply fails, the rollout stops: no other team is touched and the recorded version doesn't change.
+- **Record:** only after the canary succeeded, the workflow commits `default: <tag>` to `main` as
+  `github-actions[bot]`. From then on team merges (**deploy**) use that version too.
+- **Promote:** every team is applied with the new tag (the canary team is a no-op).
+- **Roll back or forward:** *Actions → release → Run workflow* with an existing tag, e.g.
+  `team_infrastructure/v1.0.0`. It runs the same canary → record → promote.
+- **Failure:** fix the module and merge again (a new version is released), or use *Re-run failed
+  jobs*; every step is idempotent.
+- **Before the first release** `default` is empty and teams use the working tree, so this can be
+  merged safely. The first module change releases `v1.0.0`; it applies with no changes.
+- **Try unreleased code locally:** `TG_SOURCE=$PWD/modules/team_infrastructure terragrunt plan` in a
+  team folder, or `make plan TEAM=alpha LOCAL=1`.
+
+Limits: the bot pushes straight to `main` (this needs `main` to have no rule requiring PRs; a
+`GITHUB_TOKEN` push doesn't start other workflows, which is intended); **release** and
+**deploy** have separate queues, so a team edit for the canary team landing mid-release waits on
+that team's state lock (10 minutes); tags can be moved by anyone with write access.
 
 ### Offboarding
 
@@ -154,7 +197,9 @@ module's rules are covered by its tests (see [Testing](#testing)).
 | One **deploy** runs at a time and is never cancelled; a deploy only counts as the new baseline when every apply in it succeeded | `deploy.yml` |
 | Each team's S3 lock file serialises overlapping runs on the same team (10-minute lock timeout) | `live/root.hcl`, `run-teams.sh` |
 | AWS jobs are skipped unless `AWS_CI_ENABLED` is `true`; PRs from forks never receive secrets | workflows, GitHub |
-| Actions are pinned to commit SHAs, Terragrunt is checksum-verified, and the default token is read-only. Only **offboard**'s `cleanup-pr` gets write access | workflows, `setup-tools` |
+| Actions (including the third-party terraform-module-releaser) are pinned to commit SHAs, Terragrunt is checksum-verified, and the default token is read-only. Only **offboard**'s `cleanup-pr` and **release**'s tag and record steps get write access | workflows, `setup-tools` |
+| A module change reaches teams only through **release**: canary team(s) first, the recorded version changes only after that succeeds, and a failed canary stops the rollout | `release.yml` |
+| The version to apply is validated against a release-tag pattern (`<module>/vX.Y.Z`), so a branch name or arbitrary string can't become the module source | `live/root.hcl`, `release.yml` |
 | `bootstrap/` is never applied by CI | workflows |
 
 ### Offboarding safety
@@ -200,6 +245,8 @@ All of this is under the repository's **Settings**.
    *Required reviewers* to `offboarding`. No workflow change is needed.
 4. **Actions** (*Actions → General → Workflow permissions*): keep *Read repository contents*,
    and tick *Allow GitHub Actions to create and approve pull requests* (used by `cleanup-pr`).
+   **release** requests its own write permissions per job; it also needs `main` to allow pushes
+   from the workflow (no branch protection or ruleset that requires PRs).
 5. **Bootstrap** (outside GitHub, once): after pulling changes to `bootstrap/`, re-run
    `cd bootstrap && terraform apply` with admin credentials. CI never applies it. The current
    version adds `s3:DeleteObjectVersion` on team buckets (offboarding needs it) and the
@@ -255,7 +302,8 @@ toolchain in this project.
 `tests/ci/test-changed-teams.sh` checks `scripts/changed-teams.sh`, the logic that decides
 which teams CI plans, applies or reports for destroy. Each case builds a throwaway git repo:
 - a team edits its own file
-- a module change
+- a module change, which selects no team (the release workflow owns it)
+- a `live/root.hcl` change, which selects every team
 - a docs-only change
 - a team is added
 - a team is removed
@@ -271,8 +319,12 @@ make teams           # create/refresh team folders from teams.yaml
 make validate        # offline checks (no AWS)
 make test            # module tests + change-detection tests (no AWS)
 make lint            # shellcheck + actionlint (brew install shellcheck actionlint)
-make plan TEAM=alpha # plan one team (needs AWS credentials)
+make plan TEAM=alpha # plan one team with the recorded module version (needs AWS credentials)
+make plan TEAM=alpha LOCAL=1  # same, but with the module from your working tree
 ```
+
+Use Conventional Commit messages on module changes (`feat: …`, `fix: …`): the release
+version follows them.
 
 Deploys need no command: merging to `main` runs **deploy**. To destroy a team, follow
 [Offboarding](#offboarding).

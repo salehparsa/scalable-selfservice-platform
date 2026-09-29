@@ -4,9 +4,11 @@
 #
 #   files under live/team-<name>/             -> apply <name>
 #   name added to teams.yaml                  -> apply <name>
-#   modules/, live/root.hcl, tool versions    -> apply every team in teams.yaml
+#   live/root.hcl, tool versions              -> apply every team in teams.yaml
 #   name removed from teams.yaml              -> destroy <name>
 #   no usable base (first push, new branch)   -> apply every team
+# A change to modules/ selects no team: teams run a released module version, which the release
+# workflow rolls out (canary team first, then everyone).
 #
 # Prints key=value lines for $GITHUB_OUTPUT:
 #   apply=<json>          teams to plan (PR) or apply (main)
@@ -27,7 +29,7 @@ MAX_OFFBOARD="${MAX_OFFBOARD:-3}"
 SKIP_DESTROY_CHECKS="${SKIP_DESTROY_CHECKS:-false}"
 BATCH_LIMIT="${BATCH_LIMIT:-200}"
 NAME_RE='^[a-z0-9]([a-z0-9-]{0,13}[a-z0-9])?$'
-PLATFORM_RE='^(modules/|live/root\.hcl$|\.terraform-version$|\.terragrunt-version$)'
+PLATFORM_RE='^(live/root\.hcl$|\.terraform-version$|\.terragrunt-version$)'
 
 cd "$(git rev-parse --show-toplevel)"
 

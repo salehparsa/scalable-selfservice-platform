@@ -30,3 +30,11 @@ runs:
         grep ' terragrunt_linux_amd64$' SHA256SUMS | sha256sum -c -
         sudo install -m 0755 terragrunt_linux_amd64 /usr/local/bin/terragrunt
         terragrunt --version
+
+    # Teams pin the module as a git source of this (private) repository; the job token can read it.
+    # The rewrite lives only in the runner's global git config.
+    - name: Allow Terragrunt to download the module from this repository
+      shell: bash
+      env:
+        TOKEN: ${{ github.token }}
+      run: git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
