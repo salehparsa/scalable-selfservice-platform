@@ -5,6 +5,7 @@ cost_center: "cc-0002" # cost allocation
 buckets:
   - { suffix: data, visibility: private }
   - { suffix: logs, visibility: private }
+  - { suffix: assets, visibility: public }
 # Who may assume the team role. "{account_id}" is resolved by live/root.hcl.
 # Default = this account, access delegated to IAM policies; narrow to Terraform-managed role ARNs if needed.
 trusted_principal_arns:

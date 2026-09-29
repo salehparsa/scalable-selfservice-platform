@@ -139,6 +139,7 @@ module's rules are covered by its tests (see [Testing](#testing)).
 | A team role's IAM policy names only that team's bucket ARNs, and it has no `DeleteObjectVersion`, so teams can't permanently delete versioned data | module (`iam.tf`) |
 | Each bucket policy denies object read/write/delete to every principal except the team role. Public buckets keep anonymous reads only | module (`s3.tf`) |
 | Non-TLS requests are denied on every bucket; ACLs are disabled; private buckets block all public access | module (`s3.tf`) |
+| Public buckets serve every object anonymously (`s3:GetObject`) but grant no `ListBucket`. ACLs stay blocked, and writes and deletes stay limited to the team role. The account-level Block Public Access is relaxed only for public *policies*, and is managed in code | module (`s3.tf`), `bootstrap/account.tf` |
 | The CI role can only manage `example-name-gmbh-*` buckets, `-role`s and `-policy`s. It can only attach team policies, can't modify its own identity, and can't change or delete the state bucket | `bootstrap/ci.tf` |
 | The `github-ci` user's keys can only assume the CI role | `bootstrap/ci.tf` |
 
@@ -201,7 +202,8 @@ All of this is under the repository's **Settings**.
    and tick *Allow GitHub Actions to create and approve pull requests* (used by `cleanup-pr`).
 5. **Bootstrap** (outside GitHub, once): after pulling changes to `bootstrap/`, re-run
    `cd bootstrap && terraform apply` with admin credentials. CI never applies it. The current
-   version adds `s3:DeleteObjectVersion` on team buckets, which offboarding needs.
+   version adds `s3:DeleteObjectVersion` on team buckets (offboarding needs it) and the
+   account-level Block Public Access setting (public buckets need it).
 
 ## Testing
 

@@ -27,6 +27,17 @@ DynamoDB table is needed (DynamoDB locking is deprecated in Terraform).
 The bucket name is derived from the account id, so `live/root.hcl` rebuilds
 it with `get_aws_account_id()`, with no manual copying between stacks.
 
+### Account-wide S3 Block Public Access
+
+| Resource | Setting | Why |
+|---|---|---|
+| `aws_s3_account_public_access_block` | `block_public_acls` and `ignore_public_acls` **on**; `block_public_policy` and `restrict_public_buckets` **off** | New accounts have all four on, which rejects every public bucket policy and would stop any team bucket with `visibility: public`. Managing it here keeps the setting in code instead of a console click. |
+
+This relaxes only public *policies* and only at the account level. ACLs stay blocked, and each
+bucket still has its own public access block from the team module: `private` buckets block all
+four, `public` buckets block ACLs and allow only the module's read-only policy. Applying it
+overwrites any existing account-level setting (it is an upsert).
+
 ### CI identity
 
 GitHub Actions can't use OIDC in this setup (the AWS free-tier account has no
