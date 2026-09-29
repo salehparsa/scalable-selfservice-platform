@@ -1,0 +1,9 @@
+# The released version of modules/team_infrastructure that every team runs.
+# `default` is written by .github/workflows/release.yml after a successful canary; do not edit it
+# by hand (roll back with: Actions -> release -> Run workflow with an older tag).
+# "" = nothing released yet, teams use the module from the working tree.
+default: ""
+# Teams that receive every new version first. If a canary team's apply fails, the rollout stops
+# and no other team is touched. Edit this list to change who goes first.
+canary_teams:
+  - alpha

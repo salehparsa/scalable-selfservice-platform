@@ -46,7 +46,12 @@ check "team edits its own file -> only that team" '["alpha"]' "$(val apply)"
 new_repo alpha beta
 echo "module v2" >modules/team_infrastructure/main.tf && commit "module change"
 detect
-check "module change -> every team" '["alpha","beta"]' "$(val apply)"
+check "module change alone -> no team (release.yml rolls modules out)" '[]' "$(val apply)"
+
+new_repo alpha beta
+echo "root v2" >live/root.hcl && commit "root.hcl change"
+detect
+check "root.hcl change -> every team" '["alpha","beta"]' "$(val apply)"
 
 new_repo alpha beta
 echo docs >>README.md && commit "docs only"
@@ -76,7 +81,7 @@ check "malicious folder name -> rejected and never executed" "1 no" "$RC $([ -e 
 
 # shellcheck disable=SC2046 # generated names t001..t250 contain no spaces or globs
 new_repo $(seq -f "t%03g" 1 250)
-echo "module v2" >modules/team_infrastructure/main.tf && commit "module change, 250 teams"
+echo "root v2" >live/root.hcl && commit "root.hcl change, 250 teams"
 detect
 check "250 teams -> <=200 matrix jobs covering every team once" "true 250" \
   "$(val apply_batches | jq -r '(length <= 200 | tostring) + " " + ([.[] | split(" ")[]] | unique | length | tostring)')"

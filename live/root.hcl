@@ -7,6 +7,18 @@ locals {
 
   # Team-owned settings; only the keys mapped in `inputs` below are used.
   team = yamldecode(file("${get_terragrunt_dir()}/team.yaml"))
+
+  # Platform-owned: the released module version every team runs. Written by the release
+  # workflow after a successful rollout; "" means not released yet (use the working tree).
+  # MODULE_VERSION_OVERRIDE is set only by the release workflow, to apply a version before it
+  # is recorded. The regex rejects anything that is not a release tag like team_infrastructure/v1.2.3.
+  module_repo     = "git::https://github.com/salehparsa/scalable-selfservice-platform.git"
+  module_versions = yamldecode(file("${get_parent_terragrunt_dir()}/module-versions.yaml"))
+  module_override = get_env("MODULE_VERSION_OVERRIDE", "") # empty = not overriding
+  module_version = regex(
+    "^(?:(?:[A-Za-z0-9_.-]+/)*v[0-9]+\\.[0-9]+\\.[0-9]+)?$",
+    local.module_override != "" ? local.module_override : local.module_versions.default,
+  )
 }
 
 remote_state {
@@ -29,8 +41,11 @@ remote_state {
   }
 }
 
+# Teams run a released version, not the working tree, so a change to modules/ reaches them only
+# through the release workflow. Release tags contain just the module, so there is no //subdir.
+# To try unreleased module code against a real team: TG_SOURCE=$PWD/modules/team_infrastructure
 terraform {
-  source = "${get_repo_root()}/modules/team_infrastructure"
+  source = local.module_version == "" ? "${get_repo_root()}/modules/team_infrastructure" : "${local.module_repo}?ref=${local.module_version}"
 }
 
 generate "provider" {

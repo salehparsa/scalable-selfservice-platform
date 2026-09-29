@@ -33,9 +33,9 @@ test-module: ## Module unit tests: terraform test, offline plans with fake crede
 test-ci: ## Change-detection tests for the CI pipeline (no AWS)
 	@tests/ci/test-changed-teams.sh
 
-plan: ## Plan one team: make plan TEAM=alpha
-	@[[ "$(TEAM)" =~ ^[a-z0-9-]+$$ ]] || { echo "usage: make plan TEAM=<name>"; exit 1; }
-	cd live/team-$(TEAM) && terragrunt plan
+plan: ## Plan one team: make plan TEAM=alpha  (LOCAL=1 uses the working-tree module instead of the released one)
+	@[[ "$(TEAM)" =~ ^[a-z0-9-]+$$ ]] || { echo "usage: make plan TEAM=<name> [LOCAL=1]"; exit 1; }
+	cd live/team-$(TEAM) && $(if $(LOCAL),TG_SOURCE=$(CURDIR)/$(MODULE) )terragrunt plan
 
 changed-teams: ## Show what CI would run: make changed-teams BASE=origin/main HEAD=HEAD
 	@scripts/changed-teams.sh "$(BASE)" "$(HEAD)"

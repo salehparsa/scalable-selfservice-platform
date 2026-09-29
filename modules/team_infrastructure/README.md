@@ -5,6 +5,11 @@ only those buckets. Consumed through Terragrunt from `live/team-<name>/`;
 `name_prefix` and `team_name` are injected by `live/root.hcl`, so a team file
 only declares its own buckets, trust and ownership.
 
+> Teams consume this module through a released git tag, rolled out by the **release** workflow
+> (canary team first, then everyone); see the root README, *Releasing the module*. A change on
+> `main` reaches a team only after it has been released. Use Conventional Commit messages
+> (`feat:`, `fix:`); the release version follows them.
+
 ## What it creates
 
 For each bucket in `buckets`:
