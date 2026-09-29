@@ -24,11 +24,11 @@ locals {
 
   # Platform tags last so teams cannot override them.
   tags = merge(var.tags, {
-    Team       = var.team_name
-    Owner      = var.owner
-    CostCenter = var.cost_center
-    ManagedBy  = "terraform"
-    Project    = "scalable-selfservice-platform"
+    Team        = var.team_name
+    Owner       = var.owner
+    CostCenter  = var.cost_center
+    ManagedBy   = "terraform"
+    Project     = "scalable-selfservice-platform"
     Environment = "production"
   })
 }
