@@ -1,5 +1,0 @@
-# Registry of onboarded teams. To add a team: append its name, run `make teams`,
-# then fill in live/team-<name>/team.yaml. Names: 1-15 chars, a-z 0-9 and "-".
-teams:
-  - alpha
-  - beta
