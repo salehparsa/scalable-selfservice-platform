@@ -46,6 +46,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-tools
       - run: make validate
+      - name: Module unit tests (terraform test, offline)
+        run: make test-module
 
   changes:
     name: detect changed teams

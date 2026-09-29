@@ -8,6 +8,8 @@ locals {
 
   role_name   = "${var.name_prefix}-${var.team_name}-role"
   policy_name = "${var.name_prefix}-${var.team_name}-policy"
+  # Deterministic, so bucket policies are fully known at plan time instead of "known after apply".
+  role_arn = "arn:${local.partition}:iam::${local.account_id}:role/${local.role_name}"
 
   # Keyed by suffix so reordering the list never replaces a bucket.
   buckets = {
