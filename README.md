@@ -38,7 +38,7 @@ Four workflows, split by what they are allowed to do:
 |---|---|---|---|
 | **checks** (`checks.yml`) | every PR and push to `main` | Non-Terraform checks: `make check-teams`, change-detection tests (`make test-ci`), shellcheck, actionlint | no |
 | **plan** (`plan.yml`) | pull requests | `make validate`, module tests (`make test-module`), change detection, `terragrunt plan` per changed team, `plan -destroy` per team removed from `teams.yaml` | read only |
-| **deploy** (`deploy.yml`) | push to `main` (automatic) | `make validate`, module tests, change detection, `terragrunt apply` per changed team, then moves the `deployed/main` tag. **Never destroys.** | yes |
+| **deploy** (`deploy.yml`) | push to `main` (automatic); *Run workflow* re-applies every team | `make validate`, module tests, change detection, `terragrunt apply` per changed team. **Never destroys.** | yes |
 | **offboard** (`offboard.yml`) | manual only (*Run workflow*) | Approver gate, destroy of one team, then a bot PR deleting its folder | yes |
 
 Destroying lives in its own workflow on purpose, as a safety net: no merge or deploy can
@@ -60,9 +60,13 @@ ever remove a team's resources. Only an approver running **offboard** can.
 result to the job summary:
 
 - **plan** compares with the PR base.
-- **deploy** compares with the `deployed/main` tag: the last commit whose deploy fully
-  succeeded. A failed deploy leaves the tag in place, so the next merge retries those teams
-  too. With no tag yet, every team is selected.
+- **deploy** compares with the commit of the last *successful* **deploy** run, read from the
+  Actions history (`gh run list`). No tag or extra state is stored. So:
+  - A failed deploy is retried by the next merge.
+  - If GitHub replaces a queued deploy with a newer one, the newer one still covers its changes.
+  - With no successful deploy yet, every team is selected.
+  - Running **deploy** manually (*Run workflow*) re-applies every team, e.g. after fixing a
+    failure or enabling `AWS_CI_ENABLED`.
 
 | Change | What runs |
 |---|---|
@@ -146,10 +150,10 @@ module's rules are covered by its tests (see [Testing](#testing)).
 | **plan** and **deploy** run `make validate` before any AWS job; **checks** runs the script tests and lint on every PR and push | workflows |
 | A team only plans or applies when its own folder or the platform code changed (see the change-detection table) | `changed-teams.sh` |
 | Team folder names are validated before use and only passed to the shell through `env:`, so a folder like `team-$(cmd)` is rejected, never executed | `changed-teams.sh`, workflows |
-| One **deploy** runs at a time and is never cancelled; the `deployed/main` tag only moves when every apply succeeded | `deploy.yml` |
+| One **deploy** runs at a time and is never cancelled; a deploy only counts as the new baseline when every apply in it succeeded | `deploy.yml` |
 | Each team's S3 lock file serialises overlapping runs on the same team (10-minute lock timeout) | `live/root.hcl`, `run-teams.sh` |
 | AWS jobs are skipped unless `AWS_CI_ENABLED` is `true`; PRs from forks never receive secrets | workflows, GitHub |
-| Actions are pinned to commit SHAs, Terragrunt is checksum-verified, and the default token is read-only. Only `mark-deployed` (the tag) and `cleanup-pr` get write access | workflows, `setup-tools` |
+| Actions are pinned to commit SHAs, Terragrunt is checksum-verified, and the default token is read-only. Only **offboard**'s `cleanup-pr` gets write access | workflows, `setup-tools` |
 | `bootstrap/` is never applied by CI | workflows |
 
 ### Offboarding safety

@@ -2,9 +2,11 @@
 # Never destroys anything: teams removed from teams.yaml are only reported here and are
 # destroyed by the separate, approver-gated offboard workflow.
 #
-# The `deployed/main` tag marks the last commit whose deploy fully succeeded. Changes are
-# detected from that tag (not just the previous commit), so a failed or skipped deploy is
-# picked up by the next one.
+# Changes are detected against the commit of the last *successful* deploy run (read from the
+# Actions history), not just the previous commit. A failed deploy, or a queued run that GitHub
+# replaced with a newer one, is therefore picked up by the next deploy.
+# Run this workflow manually (Run workflow) to re-apply every team, e.g. after fixing a failure
+# or after enabling AWS_CI_ENABLED.
 #
 # AWS auth: static access keys of the "github-ci" IAM user (GitHub secrets). That user can only
 # assume the CI role (vars.AWS_CI_ROLE_ARN). OIDC would avoid long-lived keys, but this AWS
@@ -23,18 +25,16 @@ on:
       - ".terragrunt-version"
       - ".github/actions/**"
       - ".github/workflows/deploy.yml"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
 
 concurrency:
   # One deploy at a time, never cancelled. If several merges queue up, GitHub keeps only the
-  # newest pending run; that is safe because it compares with the deployed tag.
+  # newest pending run; that is safe because it compares with the last successful deploy.
   group: deploy
   cancel-in-progress: false
-
-env:
-  DEPLOYED_TAG: deployed/main
 
 jobs:
   validate:
@@ -52,6 +52,9 @@ jobs:
   changes:
     name: detect changed teams
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # to find the last successful deploy run
     outputs:
       apply: ${{ steps.detect.outputs.apply }}
       apply_batches: ${{ steps.detect.outputs.apply_batches }}
@@ -59,18 +62,25 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # full history and tags, including deployed/main
+          fetch-depth: 0 # full history, so the last deployed commit can be compared
           persist-credentials: false
-      - name: Find last deployed commit
+      - name: Find the commit of the last successful deploy
         id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
         run: |
-          sha="$(git rev-parse -q --verify "refs/tags/$DEPLOYED_TAG^{commit}" || true)"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          if [ -n "$sha" ]; then
-            echo "label=last deploy ($DEPLOYED_TAG @ ${sha:0:7})" >> "$GITHUB_OUTPUT"
+          sha=""
+          if [ "$EVENT" = workflow_dispatch ]; then
+            label="manual run: every team"
           else
-            echo "label=no previous deploy: every team" >> "$GITHUB_OUTPUT"
+            sha="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow deploy.yml --branch main \
+              --status success --limit 1 --json headSha --jq '.[0].headSha // ""')"
+            label="${sha:+last successful deploy @ ${sha:0:7}}"
+            label="${label:-no previous successful deploy: every team}"
           fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "label=$label" >> "$GITHUB_OUTPUT"
       - id: detect
         uses: ./.github/actions/detect-changes
         with:
@@ -106,23 +116,3 @@ jobs:
         run: |
           read -ra teams <<< "$TEAMS"
           scripts/run-teams.sh apply "${teams[@]}"
-
-  mark-deployed:
-    name: mark deployed
-    needs: [validate, changes, apply]
-    # Move the tag only when every apply succeeded (or there was nothing to apply).
-    if: >-
-      !cancelled() && vars.AWS_CI_ENABLED == 'true'
-      && needs.validate.result == 'success'
-      && needs.changes.result == 'success'
-      && contains(fromJSON('["success","skipped"]'), needs.apply.result)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Move the deployed tag to this commit
-        run: |
-          git tag -f "$DEPLOYED_TAG" "$GITHUB_SHA"
-          git push -f origin "refs/tags/$DEPLOYED_TAG"
-          echo "$DEPLOYED_TAG -> ${GITHUB_SHA:0:7}" >> "$GITHUB_STEP_SUMMARY"
